@@ -5,23 +5,31 @@ const { createWriteStream } = require("fs");
 const cheerio = require("cheerio");
 const PDFDocument = require("pdfkit");
 
-const totalChapters = 110;
+const totalChapters = 2;
 
 async function main() {
-  // for (let chapter = 1; chapter <= totalChapters; chapter++) {
-  //   const links = await getImageUrls(chapter);
-  //   const buffers = [];
-  //   for (const link of links) buffers.push(await getImageBuffer(link));
-  //   const promise = Promise.all(
-  //     buffers.map((buffer, index) => saveImage(buffer, chapter, index + 1))
-  //   );
-  //   await promise;
-  // }
+  for (let chapter = 1; chapter <= totalChapters; chapter++) {
+    const chapterText =
+      chapter < 10
+        ? `00${chapter}`
+        : chapter < 100
+        ? `0${chapter}`
+        : `${chapter}`;
+    const links = await getImageUrls(chapterText);
+    const buffers = [];
+    for (const link of links) buffers.push(await getImageBuffer(link));
+    const promise = Promise.all(
+      buffers.map((buffer, index) => saveImage(buffer, chapter, index + 1))
+    );
+    await promise;
+  }
+
+  await createPDF();
 }
 
 async function getImageUrls(chapter) {
   const res = await fetch(
-    `https://jojolionmanga.com/manga/jojos-bizarre-adventure-part-8-jojolion-chapter-${chapter}/`
+    `https://readberserk.com/chapter/berserk-chapter-${chapter}/`
   );
   const text = await res.text();
   const $ = cheerio.load(text);
