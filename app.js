@@ -1,75 +1,87 @@
-const fetch = (...args) =>
-  import("node-fetch").then(({ default: fetch }) => fetch(...args));
-const { writeFile, readdir } = require("fs").promises;
-const { createWriteStream } = require("fs");
 const cheerio = require("cheerio");
+const { Readable } = require("stream");
+const { finished } = require("stream/promises");
+const { createWriteStream, readdirSync, existsSync, mkdirSync } = require("fs");
 const PDFDocument = require("pdfkit");
+const sizeOf = require("image-size");
 
-const totalChapters = 2;
+const base_url = "https://chapmanganato.to/manga-nf964840";
+// https://ww8.manganelo.tv/manga/manga-ba979135
+// https://ww8.manganelo.tv/chapter/manga-ba979135/chapter-1
+
+let manga_name = "blank";
 
 async function main() {
-  for (let chapter = 1; chapter <= totalChapters; chapter++) {
-    const chapterText =
-      chapter < 10
-        ? `00${chapter}`
-        : chapter < 100
-        ? `0${chapter}`
-        : `${chapter}`;
-    const links = await getImageUrls(chapterText);
-    const buffers = [];
-    for (const link of links) buffers.push(await getImageBuffer(link));
-    const promise = Promise.all(
-      buffers.map((buffer, index) => saveImage(buffer, chapter, index + 1))
-    );
-    await promise;
+  await prepare_images();
+  await prepare_pdf();
+  console.log("Finished");
+}
+
+async function prepare_images() {
+  manga_name = cheerio
+    .load(await (await fetch(base_url)).text())("h1")
+    .text();
+
+  if (!existsSync(`./${manga_name}`)) mkdirSync(`./${manga_name}`);
+
+  const mange_code = base_url.split("/").slice(-1);
+  const template_url = `https://ww8.manganelo.tv/chapter/${mange_code}/chapter-`;
+
+  let stop = false;
+  let chapter = 1;
+
+  while (!stop) {
+    const chapter_url = `${template_url}${chapter}`;
+    const res = await fetch(chapter_url);
+    const html = await res.text();
+    const $ = cheerio.load(html);
+
+    stop = $("h1").text() == "Not Found";
+
+    let image_urls = [];
+    $("img").each((_, child) => image_urls.push($(child).attr("data-src")));
+    image_urls = image_urls.filter((url) => typeof url == "string");
+
+    const len = image_urls.length;
+    for (let page = 0; page < len; page++) {
+      const chapter_mod = String(chapter).padStart(4, "0");
+      const page_mod = String(page).padStart(4, "0");
+      const file_name = `./${manga_name}/${chapter_mod}-${page_mod}.jpg`;
+
+      if (existsSync(file_name)) continue;
+
+      const image_res = await fetch(image_urls[page]);
+      const file_stream = createWriteStream(file_name, { flags: "wx" });
+      await finished(Readable.fromWeb(image_res.body).pipe(file_stream));
+    }
+
+    chapter++;
   }
-
-  await createPDF();
 }
 
-async function getImageUrls(chapter) {
-  const res = await fetch(
-    `https://readberserk.com/chapter/berserk-chapter-${chapter}/`
-  );
-  const text = await res.text();
-  const $ = cheerio.load(text);
+async function prepare_pdf() {
+  const doc = new PDFDocument({ autoFirstPage: false });
+  doc.pipe(createWriteStream(`${manga_name}.pdf`));
+  const { outline } = doc;
 
-  const links = [];
-  $("img").each((i, child) => links.push($(child).attr("src")));
-  return links;
-}
+  const image_files = readdirSync(`./${manga_name}`);
+  let last_chapter = 0;
+  let set_content = false;
+  for (const image_file of image_files) {
+    const current_chapter = Number(image_file.split("-")[0]);
+    if (last_chapter != current_chapter) {
+      last_chapter = current_chapter;
+      set_content = true;
+    } else if (set_content) {
+      outline.addItem(`Chapter: ${current_chapter}`);
+      set_content = false;
+    }
 
-async function getImageBuffer(link) {
-  const res = await fetch(link);
-  return Buffer.from(await res.arrayBuffer());
-}
-
-async function saveImage(buffer, chapter, page) {
-  await writeFile(`./images/${chapter}-${page}.png`, buffer);
-}
-
-async function createPDF() {
-  const images = await readdir("./images");
-  images.sort((a, b) => {
-    const a_s = a.split(".")[0].split("-");
-    const b_s = b.split(".")[0].split("-");
-
-    if (Number(a_s[0]) < Number(b_s[0])) return -1;
-    else if (Number(a_s[0]) > Number(b_s[0])) return 1;
-
-    if (Number(a_s[1]) < Number(b_s[1])) return -1;
-    else if (Number(a_s[1]) > Number(b_s[1])) return 1;
-  });
-
-  const doc = new PDFDocument({ size: [2000, 1400], margin: 0 });
-  doc.pipe(createWriteStream("./output.pdf"));
-
-  for (const image of images)
-    doc.addPage().image(`./images/${image}`, {
-      fit: [2000, 1400],
-      align: "center",
-      valign: "center",
-    });
+    const { width, height } = sizeOf(`./${manga_name}/${image_file}`);
+    doc
+      .addPage({ size: [width, height], margin: 0 })
+      .image(`./${manga_name}/${image_file}`);
+  }
 
   doc.end();
 }
